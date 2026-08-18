@@ -1,0 +1,720 @@
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+local Mouse = LocalPlayer:GetMouse()
+
+local currentCube = nil
+local currentConnection = nil
+local capturedNPCs = {}
+local painelAberto = false
+local painelGui = nil
+local autoCapture = false
+local lastClickTime = 0
+local DOUBLE_CLICK_TIME = 0.35
+local CAPTURE_RADIUS = 10
+local prisonCube = nil
+
+-- ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "CubeGui"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = game.CoreGui
+
+-- ==================== PRISON CUBE ====================
+local function getPrisonCube()
+    if prisonCube and prisonCube.Parent then return prisonCube end
+    local pc = Instance.new("Part")
+    pc.Name = "PrisonCube"
+    pc.Size = Vector3.new(100, 100, 100)
+    pc.Anchored = true
+    pc.CanCollide = false
+    pc.Transparency = 1
+    pc.CastShadow = false
+    pc.Position = Vector3.new(0, 9999, 0)
+    pc.Parent = workspace
+    prisonCube = pc
+    return pc
+end
+
+-- ==================== INDICADOR AUTO CAPTURA ====================
+local indicator = Instance.new("Frame")
+indicator.Size = UDim2.new(0, 190, 0, 34)
+indicator.Position = UDim2.new(0.5, -95, 0, 15)
+indicator.BackgroundColor3 = Color3.fromRGB(5, 5, 15)
+indicator.BackgroundTransparency = 0.15
+indicator.BorderSizePixel = 0
+indicator.Visible = false
+indicator.Parent = screenGui
+Instance.new("UICorner", indicator).CornerRadius = UDim.new(0, 10)
+
+local indStroke = Instance.new("UIStroke", indicator)
+indStroke.Thickness = 2
+indStroke.Color = Color3.fromRGB(255, 50, 50)
+
+local indDot = Instance.new("Frame", indicator)
+indDot.Size = UDim2.new(0, 11, 0, 11)
+indDot.Position = UDim2.new(0, 11, 0.5, -5)
+indDot.BackgroundColor3 = Color3.fromRGB(255, 50, 50)
+indDot.BorderSizePixel = 0
+Instance.new("UICorner", indDot).CornerRadius = UDim.new(1, 0)
+
+local indText = Instance.new("TextLabel", indicator)
+indText.Size = UDim2.new(1, -32, 1, 0)
+indText.Position = UDim2.new(0, 28, 0, 0)
+indText.BackgroundTransparency = 1
+indText.Text = "⬡ AUTO CAPTURA ATIVA"
+indText.TextColor3 = Color3.fromRGB(255, 100, 100)
+indText.TextSize = 12
+indText.Font = Enum.Font.GothamBold
+indText.TextXAlignment = Enum.TextXAlignment.Left
+
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        if autoCapture then indDot.BackgroundColor3 = Color3.fromRGB(255, 50, 50) end
+        task.wait(0.5)
+        if autoCapture then indDot.BackgroundColor3 = Color3.fromRGB(100, 20, 20) end
+    end
+end)
+
+local function setAutoCapture(val)
+    autoCapture = val
+    indicator.Visible = val
+    if currentCube then
+        local hl = currentCube:FindFirstChildOfClass("Highlight")
+        if hl then
+            hl.OutlineColor = val
+                and Color3.fromRGB(255, 50, 50)
+                or Color3.fromRGB(0, 255, 255)
+        end
+    end
+end
+
+-- ==================== HELPERS ====================
+local function isPlayerCharacter(obj)
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Character == obj then return true end
+    end
+    return false
+end
+
+local function jaCapturado(obj)
+    for _, c in ipairs(capturedNPCs) do
+        if c == obj then return true end
+    end
+    return false
+end
+
+local function removerDaLista(npc)
+    for i, v in ipairs(capturedNPCs) do
+        if v == npc then table.remove(capturedNPCs, i) break end
+    end
+end
+
+-- ==================== CAPTURAR ====================
+local function capturarNPC(npc)
+    if jaCapturado(npc) then return end
+    if isPlayerCharacter(npc) then return end
+
+    local npcHRP = npc:FindFirstChild("HumanoidRootPart")
+    local hum = npc:FindFirstChildOfClass("Humanoid")
+    if not npcHRP or not hum then return end
+    if hum.Health <= 0 then return end
+
+    table.insert(capturedNPCs, npc)
+    npcHRP.Anchored = true
+
+    local prison = getPrisonCube()
+    local ox = math.random(-40, 40)
+    local oy = math.random(-40, 40)
+    local oz = math.random(-40, 40)
+    npcHRP.CFrame = CFrame.new(prison.Position + Vector3.new(ox, oy, oz))
+end
+
+-- ==================== AÇÕES ====================
+local function killNPC(npc)
+    local hum = npc:FindFirstChildOfClass("Humanoid")
+    if hum then hum.Health = 0 end
+    local npcHRP = npc:FindFirstChild("HumanoidRootPart")
+    if npcHRP then npcHRP.Anchored = false end
+    removerDaLista(npc)
+end
+
+local function soltarNPC(npc)
+    local char = LocalPlayer.Character
+    local npcHRP = npc:FindFirstChild("HumanoidRootPart")
+    if npcHRP and char then
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local angle = math.random() * math.pi * 2
+            npcHRP.CFrame = hrp.CFrame * CFrame.new(
+                math.cos(angle) * 3, 0, math.sin(angle) * 3
+            )
+            npcHRP.Anchored = false
+        end
+    end
+    removerDaLista(npc)
+end
+
+local function soltarTodos()
+    -- copia para iterar sem problema
+    local lista = {}
+    for _, v in ipairs(capturedNPCs) do table.insert(lista, v) end
+    for _, npc in ipairs(lista) do
+        soltarNPC(npc)
+    end
+    capturedNPCs = {}
+end
+
+local function atirarNPC(npc)
+    local char = LocalPlayer.Character
+    local npcHRP = npc:FindFirstChild("HumanoidRootPart")
+    if not npcHRP or not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local side = (math.random(0, 1) == 0) and -1 or 1
+    npcHRP.Anchored = false
+    npcHRP.CFrame = hrp.CFrame * CFrame.new(side * 3, 0, 0)
+
+    local alvo = nil
+    local menorDist = math.huge
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= LocalPlayer and plr.Character then
+            local plrHRP = plr.Character:FindFirstChild("HumanoidRootPart")
+            if plrHRP then
+                local d = (plrHRP.Position - hrp.Position).Magnitude
+                if d < menorDist then
+                    menorDist = d
+                    alvo = plrHRP
+                end
+            end
+        end
+    end
+
+    if alvo then
+        local dir = (alvo.Position - npcHRP.Position).Unit
+        local bv = Instance.new("BodyVelocity")
+        bv.Velocity = dir * 9e9
+        bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+        bv.Parent = npcHRP
+        game:GetService("Debris"):AddItem(bv, 0.05)
+    end
+
+    removerDaLista(npc)
+end
+
+local function despedacarNPC(npc)
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+    for _, joint in ipairs(npc:GetDescendants()) do
+        if joint:IsA("Motor6D") or joint:IsA("Weld") or joint:IsA("WeldConstraint") then
+            joint:Destroy()
+        end
+    end
+
+    for _, p in ipairs(npc:GetDescendants()) do
+        if p:IsA("BasePart") then
+            p.Anchored = false
+            p.CanCollide = true
+            if hrp then
+                local angle = math.random() * math.pi * 2
+                local dist = math.random(2, 5)
+                p.CFrame = hrp.CFrame * CFrame.new(
+                    math.cos(angle) * dist, math.random(0, 3), math.sin(angle) * dist
+                )
+                p.Velocity = Vector3.new(
+                    math.random(-20, 20), math.random(10, 30), math.random(-20, 20)
+                )
+            end
+        end
+    end
+
+    removerDaLista(npc)
+end
+
+-- ==================== PAINEL ====================
+local function fecharPainel()
+    if painelGui then painelGui:Destroy() painelGui = nil end
+    painelAberto = false
+end
+
+local function abrirOpcoes(npc, btnRef, opcoesAtual)
+    if opcoesAtual and opcoesAtual.Parent then
+        opcoesAtual:Destroy()
+        return nil
+    end
+
+    local menu = Instance.new("Frame")
+    menu.Size = UDim2.new(0, 150, 0, 160)
+    menu.BackgroundColor3 = Color3.fromRGB(4, 8, 22)
+    menu.BorderSizePixel = 0
+    menu.ZIndex = 25
+    menu.Position = UDim2.new(
+        0, btnRef.AbsolutePosition.X - screenGui.AbsolutePosition.X,
+        0, btnRef.AbsolutePosition.Y - screenGui.AbsolutePosition.Y + 28
+    )
+    menu.Parent = screenGui
+    Instance.new("UICorner", menu).CornerRadius = UDim.new(0, 8)
+
+    local mStroke = Instance.new("UIStroke", menu)
+    mStroke.Color = Color3.fromRGB(0, 120, 255)
+    mStroke.Thickness = 1
+
+    local mLayout = Instance.new("UIListLayout", menu)
+    mLayout.Padding = UDim.new(0, 3)
+    mLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local mPad = Instance.new("UIPadding", menu)
+    mPad.PaddingTop = UDim.new(0, 5)
+    mPad.PaddingLeft = UDim.new(0, 5)
+    mPad.PaddingRight = UDim.new(0, 5)
+
+    local acoes = {
+        {text = "💀  Kill",        cor = Color3.fromRGB(160,0,0),   fn = function() killNPC(npc) fecharPainel() end},
+        {text = "↓  Soltar",       cor = Color3.fromRGB(0,70,160),  fn = function() soltarNPC(npc) fecharPainel() end},
+        {text = "🚀  Atirar",      cor = Color3.fromRGB(140,55,0),  fn = function() atirarNPC(npc) fecharPainel() end},
+        {text = "💥  Despedaçar",  cor = Color3.fromRGB(70,0,130),  fn = function() despedacarNPC(npc) fecharPainel() end},
+    }
+
+    for i, a in ipairs(acoes) do
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.new(1, 0, 0, 30)
+        b.BackgroundColor3 = a.cor
+        b.Text = a.text
+        b.TextColor3 = Color3.fromRGB(255, 255, 255)
+        b.TextSize = 11
+        b.Font = Enum.Font.GothamBold
+        b.BorderSizePixel = 0
+        b.LayoutOrder = i
+        b.ZIndex = 26
+        b.Parent = menu
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+
+        b.MouseEnter:Connect(function() b.BackgroundTransparency = 0.3 end)
+        b.MouseLeave:Connect(function() b.BackgroundTransparency = 0 end)
+        b.MouseButton1Click:Connect(function()
+            menu:Destroy()
+            a.fn()
+        end)
+    end
+
+    return menu
+end
+
+local function abrirPainel()
+    if painelAberto then fecharPainel() return end
+    painelAberto = true
+
+    local overlay = Instance.new("Frame")
+    overlay.Size = UDim2.new(1, 0, 1, 0)
+    overlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    overlay.BackgroundTransparency = 0.55
+    overlay.BorderSizePixel = 0
+    overlay.ZIndex = 10
+    overlay.Parent = screenGui
+    painelGui = overlay
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 460, 0, 380)
+    frame.Position = UDim2.new(0.5, -230, 0.5, -190)
+    frame.BackgroundColor3 = Color3.fromRGB(4, 7, 18)
+    frame.BorderSizePixel = 0
+    frame.ZIndex = 11
+    frame.Parent = overlay
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
+
+    local fStroke = Instance.new("UIStroke", frame)
+    fStroke.Color = Color3.fromRGB(0, 200, 255)
+    fStroke.Thickness = 2
+
+    -- Header
+    local header = Instance.new("Frame")
+    header.Size = UDim2.new(1, 0, 0, 42)
+    header.BackgroundColor3 = Color3.fromRGB(0, 30, 80)
+    header.BackgroundTransparency = 0.2
+    header.BorderSizePixel = 0
+    header.ZIndex = 12
+    header.Parent = frame
+    Instance.new("UICorner", header).CornerRadius = UDim.new(0, 12)
+
+    local titleLbl = Instance.new("TextLabel")
+    titleLbl.Size = UDim2.new(1, -50, 1, 0)
+    titleLbl.Position = UDim2.new(0, 14, 0, 0)
+    titleLbl.BackgroundTransparency = 1
+    titleLbl.Text = "⬡  NPCs Capturados  [" .. #capturedNPCs .. "]"
+    titleLbl.TextColor3 = Color3.fromRGB(0, 220, 255)
+    titleLbl.TextSize = 15
+    titleLbl.Font = Enum.Font.GothamBold
+    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
+    titleLbl.ZIndex = 13
+    titleLbl.Parent = header
+
+    -- Botão X fechar
+    local closeBtn = Instance.new("TextButton")
+    closeBtn.Size = UDim2.new(0, 30, 0, 30)
+    closeBtn.Position = UDim2.new(1, -36, 0, 6)
+    closeBtn.BackgroundColor3 = Color3.fromRGB(180, 0, 0)
+    closeBtn.Text = "✕"
+    closeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeBtn.TextSize = 13
+    closeBtn.Font = Enum.Font.GothamBold
+    closeBtn.BorderSizePixel = 0
+    closeBtn.ZIndex = 14
+    closeBtn.Parent = header
+    Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
+    closeBtn.MouseButton1Click:Connect(fecharPainel)
+
+    -- Botão SOLTAR TODOS
+    local soltarTodosBtn = Instance.new("TextButton")
+    soltarTodosBtn.Size = UDim2.new(1, -16, 0, 34)
+    soltarTodosBtn.Position = UDim2.new(0, 8, 0, 48)
+    soltarTodosBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 30)
+    soltarTodosBtn.Text = "✦  Soltar Todos os NPCs  ✦"
+    soltarTodosBtn.TextColor3 = Color3.fromRGB(180, 255, 200)
+    soltarTodosBtn.TextSize = 13
+    soltarTodosBtn.Font = Enum.Font.GothamBold
+    soltarTodosBtn.BorderSizePixel = 0
+    soltarTodosBtn.ZIndex = 12
+    soltarTodosBtn.Parent = frame
+    Instance.new("UICorner", soltarTodosBtn).CornerRadius = UDim.new(0, 8)
+
+    local stStroke = Instance.new("UIStroke", soltarTodosBtn)
+    stStroke.Color = Color3.fromRGB(0, 220, 80)
+    stStroke.Thickness = 1
+
+    soltarTodosBtn.MouseEnter:Connect(function()
+        soltarTodosBtn.BackgroundColor3 = Color3.fromRGB(0, 140, 50)
+    end)
+    soltarTodosBtn.MouseLeave:Connect(function()
+        soltarTodosBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 30)
+    end)
+    soltarTodosBtn.MouseButton1Click:Connect(function()
+        soltarTodos()
+        fecharPainel()
+    end)
+
+    -- Fecha ao clicar no overlay
+    overlay.InputBegan:Connect(function(inp)
+        if inp.UserInputType == Enum.UserInputType.MouseButton1 then
+            fecharPainel()
+        end
+    end)
+
+    -- Scroll de cards
+    local scroll = Instance.new("ScrollingFrame")
+    scroll.Size = UDim2.new(1, -10, 1, -94)
+    scroll.Position = UDim2.new(0, 5, 0, 90)
+    scroll.BackgroundTransparency = 1
+    scroll.BorderSizePixel = 0
+    scroll.ScrollBarThickness = 4
+    scroll.ScrollBarImageColor3 = Color3.fromRGB(0, 180, 255)
+    scroll.ZIndex = 12
+    scroll.Parent = frame
+
+    local listLayout = Instance.new("UIListLayout", scroll)
+    listLayout.Padding = UDim.new(0, 8)
+    listLayout.FillDirection = Enum.FillDirection.Horizontal
+    listLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local padScroll = Instance.new("UIPadding", scroll)
+    padScroll.PaddingLeft = UDim.new(0, 8)
+    padScroll.PaddingTop = UDim.new(0, 8)
+
+    -- Mensagem se vazio
+    if #capturedNPCs == 0 then
+        local empty = Instance.new("TextLabel")
+        empty.Size = UDim2.new(1, 0, 1, 0)
+        empty.BackgroundTransparency = 1
+        empty.Text = "Nenhum NPC capturado"
+        empty.TextColor3 = Color3.fromRGB(100, 150, 200)
+        empty.TextSize = 14
+        empty.Font = Enum.Font.Gotham
+        empty.ZIndex = 13
+        empty.Parent = scroll
+        return
+    end
+
+    local menuAberto = nil
+
+    for i, npc in ipairs(capturedNPCs) do
+        local card = Instance.new("Frame")
+        card.Size = UDim2.new(0, 105, 0, 145)
+        card.BackgroundColor3 = Color3.fromRGB(8, 14, 35)
+        card.BorderSizePixel = 0
+        card.LayoutOrder = i
+        card.ZIndex = 13
+        card.Parent = scroll
+        Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
+
+        local cStroke = Instance.new("UIStroke", card)
+        cStroke.Color = Color3.fromRGB(0, 80, 200)
+        cStroke.Thickness = 1
+
+        -- ViewportFrame
+        local vp = Instance.new("ViewportFrame")
+        vp.Size = UDim2.new(1, -6, 0, 88)
+        vp.Position = UDim2.new(0, 3, 0, 4)
+        vp.BackgroundColor3 = Color3.fromRGB(3, 7, 22)
+        vp.BorderSizePixel = 0
+        vp.LightDirection = Vector3.new(-1, -2, -1)
+        vp.LightColor = Color3.fromRGB(160, 210, 255)
+        vp.ZIndex = 14
+        vp.Parent = card
+        Instance.new("UICorner", vp).CornerRadius = UDim.new(0, 6)
+
+        -- Clona NPC para viewport (só visual)
+        local ok, clone = pcall(function() return npc:Clone() end)
+        if ok and clone then
+            for _, s in ipairs(clone:GetDescendants()) do
+                if s:IsA("Script") or s:IsA("LocalScript")
+                    or s:IsA("ClickDetector") or s:IsA("BillboardGui") then
+                    s:Destroy()
+                end
+            end
+            local cHRP = clone:FindFirstChild("HumanoidRootPart")
+            if cHRP then
+                cHRP.Anchored = true
+                cHRP.CFrame = CFrame.new(0, 0, 0)
+            end
+            -- Remove humanoid para não mostrar nome/barra de vida
+            local cHum = clone:FindFirstChildOfClass("Humanoid")
+            if cHum then cHum:Destroy() end
+            clone.Parent = vp
+
+            local vpCam = Instance.new("Camera", vp)
+            vp.CurrentCamera = vpCam
+            if cHRP then
+                vpCam.CFrame = CFrame.new(
+                    cHRP.Position + Vector3.new(0, 1.2, 3.8),
+                    cHRP.Position + Vector3.new(0, 0.8, 0)
+                )
+            end
+        end
+
+        -- Nome do NPC
+        local nameLbl = Instance.new("TextLabel")
+        nameLbl.Size = UDim2.new(1, -4, 0, 16)
+        nameLbl.Position = UDim2.new(0, 2, 0, 95)
+        nameLbl.BackgroundTransparency = 1
+        nameLbl.Text = npc.Name
+        nameLbl.TextColor3 = Color3.fromRGB(140, 200, 255)
+        nameLbl.TextSize = 10
+        nameLbl.Font = Enum.Font.Gotham
+        nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+        nameLbl.ZIndex = 14
+        nameLbl.Parent = card
+
+        -- Botão Ações
+        local actBtn = Instance.new("TextButton")
+        actBtn.Size = UDim2.new(1, -6, 0, 26)
+        actBtn.Position = UDim2.new(0, 3, 0, 114)
+        actBtn.BackgroundColor3 = Color3.fromRGB(0, 60, 160)
+        actBtn.Text = "⚙  Ações"
+        actBtn.TextColor3 = Color3.fromRGB(180, 220, 255)
+        actBtn.TextSize = 11
+        actBtn.Font = Enum.Font.GothamBold
+        actBtn.BorderSizePixel = 0
+        actBtn.ZIndex = 14
+        actBtn.Parent = card
+        Instance.new("UICorner", actBtn).CornerRadius = UDim.new(0, 5)
+
+        actBtn.MouseEnter:Connect(function()
+            actBtn.BackgroundColor3 = Color3.fromRGB(0, 90, 210)
+        end)
+        actBtn.MouseLeave:Connect(function()
+            actBtn.BackgroundColor3 = Color3.fromRGB(0, 60, 160)
+        end)
+
+        local npcRef = npc
+        actBtn.MouseButton1Click:Connect(function()
+            menuAberto = abrirOpcoes(npcRef, actBtn, menuAberto)
+        end)
+    end
+
+    listLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        scroll.CanvasSize = UDim2.new(0, listLayout.AbsoluteContentSize.X + 16, 0, 0)
+    end)
+    scroll.CanvasSize = UDim2.new(0, listLayout.AbsoluteContentSize.X + 16, 0, 0)
+end
+
+-- ==================== CUBO PRINCIPAL ====================
+local function spawnCube(char)
+    if currentConnection then currentConnection:Disconnect() end
+    if currentCube then currentCube:Destroy() end
+    capturedNPCs = {}
+    setAutoCapture(false)
+    fecharPainel()
+
+    local hrp = char:WaitForChild("HumanoidRootPart")
+
+    local cube = Instance.new("Part")
+    cube.Name = "CyberCubeFloat"
+    cube.Size = Vector3.new(1, 1, 1)
+    cube.Anchored = true
+    cube.CanCollide = false
+    cube.Material = Enum.Material.Glass
+    cube.Color = Color3.fromRGB(10, 10, 10)
+    cube.Transparency = 0.78
+    cube.CastShadow = false
+    cube.Parent = workspace
+    currentCube = cube
+
+    local hl = Instance.new("Highlight")
+    hl.FillTransparency = 1
+    hl.OutlineTransparency = 0
+    hl.OutlineColor = Color3.fromRGB(0, 255, 255)
+    hl.Parent = cube
+
+    -- Trails originais
+    local att0 = Instance.new("Attachment")
+    att0.Position = Vector3.new(0, 0.5, 0)
+    att0.Parent = cube
+    local att1 = Instance.new("Attachment")
+    att1.Position = Vector3.new(0, -0.5, 0)
+    att1.Parent = cube
+
+    local trail = Instance.new("Trail")
+    trail.Attachment0 = att0
+    trail.Attachment1 = att1
+    trail.Lifetime = 1.2
+    trail.MinLength = 0.02
+    trail.FaceCamera = true
+    trail.LightInfluence = 0
+    trail.LightEmission = 0.15
+    trail.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(0,80,80)),
+        ColorSequenceKeypoint.new(0.2, Color3.fromRGB(5,15,15)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(3,3,3)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(0,0,0)),
+    })
+    trail.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.2),
+        NumberSequenceKeypoint.new(0.3, 0.4),
+        NumberSequenceKeypoint.new(0.7, 0.7),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    trail.WidthScale = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 1),
+        NumberSequenceKeypoint.new(0.5, 0.6),
+        NumberSequenceKeypoint.new(1, 0.1),
+    })
+    trail.Parent = cube
+
+    local att2 = Instance.new("Attachment")
+    att2.Position = Vector3.new(0, 0.25, 0)
+    att2.Parent = cube
+    local att3 = Instance.new("Attachment")
+    att3.Position = Vector3.new(0, -0.25, 0)
+    att3.Parent = cube
+
+    local innerTrail = Instance.new("Trail")
+    innerTrail.Attachment0 = att2
+    innerTrail.Attachment1 = att3
+    innerTrail.Lifetime = 0.8
+    innerTrail.MinLength = 0.02
+    innerTrail.FaceCamera = true
+    innerTrail.LightInfluence = 0
+    innerTrail.LightEmission = 0.4
+    innerTrail.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(0,120,120)),
+        ColorSequenceKeypoint.new(0.4, Color3.fromRGB(0,40,40)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(0,0,0)),
+    })
+    innerTrail.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.3),
+        NumberSequenceKeypoint.new(0.5, 0.6),
+        NumberSequenceKeypoint.new(1, 1),
+    })
+    innerTrail.WidthScale = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.5),
+        NumberSequenceKeypoint.new(1, 0),
+    })
+    innerTrail.Parent = cube
+
+    local click = Instance.new("ClickDetector")
+    click.MaxActivationDistance = 20
+    click.Parent = cube
+
+    click.MouseClick:Connect(function(plr)
+        if plr ~= LocalPlayer then return end
+
+        local now = tick()
+        local diff = now - lastClickTime
+
+        if diff <= DOUBLE_CLICK_TIME then
+            -- Duplo clique: toggle auto captura
+            lastClickTime = 0
+            setAutoCapture(not autoCapture)
+            task.spawn(function()
+                for _ = 1, 4 do
+                    hl.OutlineTransparency = 0.7
+                    task.wait(0.07)
+                    hl.OutlineTransparency = 0
+                    task.wait(0.07)
+                end
+            end)
+        else
+            lastClickTime = now
+            -- Clique simples: efeito + abre/fecha painel
+            task.spawn(function()
+                cube.Transparency = 0.35
+                cube.Color = Color3.fromRGB(5, 5, 5)
+                hl.FillTransparency = 0.6
+                hl.FillColor = Color3.fromRGB(0, 200, 255)
+                task.wait(0.15)
+                cube.Transparency = 0.78
+                cube.Color = Color3.fromRGB(10, 10, 10)
+                hl.FillTransparency = 1
+            end)
+
+            task.delay(DOUBLE_CLICK_TIME + 0.05, function()
+                if lastClickTime == now then
+                    if painelAberto then
+                        fecharPainel()
+                    else
+                        abrirPainel()
+                    end
+                end
+            end)
+        end
+    end)
+
+    -- Loop principal
+    local t = 0
+    currentConnection = RunService.Heartbeat:Connect(function(dt)
+        if not cube or not cube.Parent then return end
+        if not hrp or not hrp.Parent then return end
+        t += dt
+
+        -- Cubo segue o personagem (igual ao original)
+        local leftPos = hrp.CFrame * CFrame.new(-3, 0.5, 0)
+        local floatY = math.sin(t * 2) * 0.5
+        cube.CFrame = CFrame.new(leftPos.Position + Vector3.new(0, floatY, 0))
+            * CFrame.Angles(t * 0.3, t * 0.8, 0)
+
+        -- Auto captura
+        if autoCapture then
+            for _, obj in ipairs(workspace:GetDescendants()) do
+                if obj:IsA("Model") and obj ~= char and not isPlayerCharacter(obj) then
+                    local npcHRP = obj:FindFirstChild("HumanoidRootPart")
+                    local hum = obj:FindFirstChildOfClass("Humanoid")
+                    if npcHRP and hum and hum.Health > 0 then
+                        local dist = (npcHRP.Position - hrp.Position).Magnitude
+                        if dist <= CAPTURE_RADIUS then
+                            capturarNPC(obj)
+                        end
+                    end
+                end
+            end
+        end
+    end)
+end
+
+if LocalPlayer.Character then
+    spawnCube(LocalPlayer.Character)
+end
+LocalPlayer.CharacterAdded:Connect(spawnCube)
